@@ -1,16 +1,24 @@
-# React + Vite
+# Signa · Myanmar Sign Language Recognition
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A browser based Myanmar Sign Language demo. Start a tracking session to see hand landmarks and live BiLSTM word predictions, or browse the dataset vocabulary below the camera.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```sh
+npm install
+npm run dev
+```
 
-## React Compiler
+Allow camera access when prompted. The page uses MediaPipe Pose and Hand Landmarker in the browser, then passes 200-frame pose and hand sequences to the BiLSTM classifier. Camera frames are processed locally. The classifier weights and MediaPipe task models download from their respective upstream hosts the first time a session starts.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Data and model sources
 
-## Expanding the Oxlint configuration
+- Myanmar vocabulary, annotations, and extracted keypoints are from [lawun330/myanmar-sign-language-recognition](https://github.com/lawun330/myanmar-sign-language-recognition).
+- The underlying [MSL4Emergency corpus](https://github.com/ye-kyaw-thu/MSL4Emergency) is licensed CC BY-NC-SA 4.0. Keep the attribution and license terms when sharing or adapting the dataset; commercial use is not permitted under that license.
+- The BiLSTM ONNX model is loaded directly from the source repository at runtime. The model files are not redistributed in this project.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+The local `data/myanmar-sign-language-recognition/` folder contains 558 annotations, 541 label classes, train/validation/test and five-fold splits, 558 pose-and-hand landmark sequences with visibility arrays, extraction statistics, and five sample inference videos. The homepage bundles the label map and annotations for the word dashboard.
+
+## Recognition notes
+
+The dashboard shows the current top model match, a short list of stable session predictions, and a searchable vocabulary. Predictions can vary with camera framing and signing style; the model is an educational demonstration rather than a certified translation service.

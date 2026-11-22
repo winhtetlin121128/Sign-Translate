@@ -1,26 +1,116 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision'
+import labelMap from './data/msl-label-map.json'
+import annotationText from './data/msl-annotations.txt?raw'
 import './App.css'
 
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
+const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task'
+const MODEL_SOURCE_REVISION = '76d200c5b3eea3a13c4f314e61334b5d725611b5'
+const MODEL_SOURCE = `https://raw.githubusercontent.com/lawun330/myanmar-sign-language-recognition/${MODEL_SOURCE_REVISION}/onnx_models`
+const ONNX_MODEL_URL = `${MODEL_SOURCE}/bilstm_msl.onnx`
+const ONNX_WEIGHTS_URL = `${MODEL_SOURCE}/bilstm_msl.onnx.data`
+const MAX_SEQUENCE_LENGTH = 200
+const LANDMARK_COUNT = 75
+const COORDINATE_COUNT = 3
+const FEATURE_COUNT = LANDMARK_COUNT * COORDINATE_COUNT
+const LABELS_BY_INDEX = Object.entries(labelMap.label2idx)
+  .sort(([, first], [, second]) => first - second)
+  .map(([label]) => label)
+const GLOSS_TO_WORD = new Map(annotationText
+  .split(/\r?\n/)
+  .filter(Boolean)
+  .map((line) => line.split('\t'))
+  .filter(([written, gloss]) => written && gloss)
+  .map(([written, gloss]) => [gloss.trim(), written.replace(/\s*။\s*$/, '').trim()]))
+
 const CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8],
   [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16],
   [13, 17], [17, 18], [18, 19], [19, 20], [0, 17],
 ]
 
+function makeKeypointFrame(poseResult, handResult) {
+  const coordinates = new Float32Array(FEATURE_COUNT)
+  const pose = poseResult.landmarks?.[0] || []
+  pose.slice(0, 33).forEach((point, index) => {
+    const start = index * COORDINATE_COUNT
+    coordinates[start] = point.x
+    coordinates[start + 1] = point.y
+    coordinates[start + 2] = point.z
+  })
+
+  const detectedHands = handResult.landmarks || []
+  detectedHands.forEach((landmarks, index) => {
+    const handedness = handResult.handedness?.[index]?.[0]?.categoryName
+    const handStart = handedness === 'Right' ? 33 : 54
+    landmarks.slice(0, 21).forEach((point, pointIndex) => {
+      const start = (handStart + pointIndex) * COORDINATE_COUNT
+      coordinates[start] = point.x
+      coordinates[start + 1] = point.y
+      coordinates[start + 2] = point.z
+    })
+  })
+
+  return { coordinates, hasHands: detectedHands.length > 0 }
+}
+
+function makeClassifierTensors(samples, ort) {
+  const selected = samples.length > MAX_SEQUENCE_LENGTH
+    ? samples.slice(Math.floor((samples.length - MAX_SEQUENCE_LENGTH) / 2), Math.floor((samples.length - MAX_SEQUENCE_LENGTH) / 2) + MAX_SEQUENCE_LENGTH)
+    : samples
+  const featureData = new Float32Array(MAX_SEQUENCE_LENGTH * FEATURE_COUNT)
+  const paddingMask = new Uint8Array(MAX_SEQUENCE_LENGTH)
+  const sequenceLength = selected.length
+
+  selected.forEach((sample, frameIndex) => {
+    const frame = sample.coordinates
+    const leftShoulder = 11 * COORDINATE_COUNT
+    const rightShoulder = 12 * COORDINATE_COUNT
+    const midpoint = [0, 1, 2].map((axis) => (frame[leftShoulder + axis] + frame[rightShoulder + axis]) / 2)
+    const shoulderWidth = Math.hypot(
+      frame[rightShoulder] - frame[leftShoulder],
+      frame[rightShoulder + 1] - frame[leftShoulder + 1],
+      frame[rightShoulder + 2] - frame[leftShoulder + 2],
+    ) || 1
+
+    for (let featureIndex = 0; featureIndex < FEATURE_COUNT; featureIndex += 1) {
+      const axis = featureIndex % COORDINATE_COUNT
+      const normalized = (frame[featureIndex] - midpoint[axis]) / shoulderWidth
+      featureData[frameIndex * FEATURE_COUNT + featureIndex] = axis === 2 ? 0 : normalized
+    }
+  })
+
+  paddingMask.fill(1, sequenceLength)
+  return {
+    keypoints: new ort.Tensor('float32', featureData, [1, MAX_SEQUENCE_LENGTH, FEATURE_COUNT]),
+    mask: new ort.Tensor('bool', paddingMask, [1, MAX_SEQUENCE_LENGTH]),
+  }
+}
+
 export default function App() {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const landmarkerRef = useRef(null)
+  const poseLandmarkerRef = useRef(null)
+  const classifierRef = useRef(null)
   const frameRef = useRef(0)
   const facingModeRef = useRef('user')
+  const ortModuleRef = useRef(null)
+  const keypointBufferRef = useRef([])
+  const predictionBusyRef = useRef(false)
+  const predictionVotesRef = useRef([])
+  const lastPredictionAtRef = useRef(0)
   const [cameraOn, setCameraOn] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [modelStatus, setModelStatus] = useState('')
   const [error, setError] = useState('')
   const [hands, setHands] = useState([])
   const [fps, setFps] = useState(0)
   const [facingMode, setFacingMode] = useState('user')
+  const [topPredictions, setTopPredictions] = useState([])
+  const [recognizedWords, setRecognizedWords] = useState([])
+  const [wordSearch, setWordSearch] = useState('')
+  const [wordPage, setWordPage] = useState(0)
 
   const stopCamera = useCallback(() => {
     cancelAnimationFrame(frameRef.current)
@@ -33,6 +123,101 @@ export default function App() {
     setCameraOn(false)
     setHands([])
     setFps(0)
+    keypointBufferRef.current = []
+    predictionVotesRef.current = []
+    predictionBusyRef.current = false
+    setTopPredictions([])
+    setRecognizedWords([])
+  }, [])
+
+  const initializeModels = useCallback(async () => {
+    if (landmarkerRef.current && poseLandmarkerRef.current && classifierRef.current) return
+    setModelStatus('Loading sign recognition models…')
+    const { FilesetResolver, HandLandmarker, PoseLandmarker } = await import('@mediapipe/tasks-vision')
+    const ort = await import('onnxruntime-web/wasm')
+    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/'
+    ort.env.wasm.numThreads = 1
+    ortModuleRef.current = ort
+    const vision = await FilesetResolver.forVisionTasks('/mediapipe/wasm')
+    const createVisionTask = async (Task, taskOptions) => {
+      try {
+        return await Task.createFromOptions(vision, {
+          ...taskOptions,
+          baseOptions: { ...taskOptions.baseOptions, delegate: 'GPU' },
+        })
+      } catch {
+        return Task.createFromOptions(vision, {
+          ...taskOptions,
+          baseOptions: { ...taskOptions.baseOptions, delegate: 'CPU' },
+        })
+      }
+    }
+    const [handTask, poseTask, classifier] = await Promise.all([
+      createVisionTask(HandLandmarker, {
+        baseOptions: { modelAssetPath: MODEL_URL },
+        runningMode: 'VIDEO',
+        numHands: 2,
+        minHandDetectionConfidence: 0.55,
+        minHandPresenceConfidence: 0.55,
+        minTrackingConfidence: 0.5,
+      }),
+      createVisionTask(PoseLandmarker, {
+        baseOptions: { modelAssetPath: POSE_MODEL_URL },
+        runningMode: 'VIDEO',
+        numPoses: 1,
+        minPoseDetectionConfidence: 0.5,
+        minPosePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      }),
+      ort.InferenceSession.create(ONNX_MODEL_URL, {
+        executionProviders: ['wasm'],
+        externalData: [{ path: 'bilstm_msl.onnx.data', data: ONNX_WEIGHTS_URL }],
+      }),
+    ])
+    landmarkerRef.current = handTask
+    poseLandmarkerRef.current = poseTask
+    classifierRef.current = classifier
+    setModelStatus('Models ready · Myanmar Sign Language')
+  }, [])
+
+  const classifySequence = useCallback(async (samples) => {
+    const classifier = classifierRef.current
+    if (!classifier || predictionBusyRef.current) return
+    predictionBusyRef.current = true
+    try {
+      const tensors = makeClassifierTensors(samples, ortModuleRef.current)
+      const output = await classifier.run(tensors)
+      const logits = output[classifier.outputNames[0]].data
+      const maxLogit = Math.max(...logits)
+      const exponentials = Array.from(logits, (value) => Math.exp(value - maxLogit))
+      const denominator = exponentials.reduce((sum, value) => sum + value, 0)
+      const top = exponentials
+        .map((value, index) => ({ index, confidence: value / denominator }))
+        .sort((first, second) => second.confidence - first.confidence)
+        .slice(0, 5)
+        .map(({ index, confidence }) => ({
+          label: LABELS_BY_INDEX[index] || `Class ${index}`,
+          word: GLOSS_TO_WORD.get(LABELS_BY_INDEX[index]) || LABELS_BY_INDEX[index] || `Class ${index}`,
+          confidence,
+        }))
+
+      setTopPredictions(top)
+      if (top[0]?.confidence >= 0.15) {
+        const now = Date.now()
+        predictionVotesRef.current = [...predictionVotesRef.current, { ...top[0], at: now }].slice(-3)
+        const voteCount = predictionVotesRef.current.filter((vote) => vote.label === top[0].label).length
+        if (voteCount >= 2) {
+          setRecognizedWords((current) => {
+            if (current[0]?.label === top[0].label) return current
+            return [{ ...top[0], at: now }, ...current].slice(0, 8)
+          })
+        }
+      }
+    } catch (predictionError) {
+      setError(`Sign recognition stopped: ${predictionError.message || 'model inference failed'}`)
+    } finally {
+      predictionBusyRef.current = false
+    }
   }, [])
 
   const startCamera = useCallback(async () => {
@@ -40,17 +225,7 @@ export default function App() {
     setLoading(true)
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access requires a secure connection (HTTPS or localhost).')
-      if (!landmarkerRef.current) {
-        const vision = await FilesetResolver.forVisionTasks('/mediapipe/wasm')
-        landmarkerRef.current = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
-          runningMode: 'VIDEO',
-          numHands: 2,
-          minHandDetectionConfidence: 0.55,
-          minHandPresenceConfidence: 0.55,
-          minTrackingConfidence: 0.5,
-        })
-      }
+      await initializeModels()
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: { facingMode: facingModeRef.current, width: { ideal: 1280 }, height: { ideal: 800 } },
@@ -67,7 +242,7 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [facingMode, stopCamera])
+  }, [initializeModels, stopCamera])
 
   useEffect(() => {
     if (!cameraOn) return undefined
@@ -78,7 +253,8 @@ export default function App() {
       const video = videoRef.current
       const canvas = canvasRef.current
       const detector = landmarkerRef.current
-      if (!video || !canvas || !detector || video.readyState < 2) {
+      const poseDetector = poseLandmarkerRef.current
+      if (!video || !canvas || !detector || !poseDetector || video.readyState < 2) {
         frameRef.current = requestAnimationFrame(render)
         return
       }
@@ -91,7 +267,10 @@ export default function App() {
       const now = performance.now()
       if (now !== lastTime) {
         const result = detector.detectForVideo(video, now)
+        const poseResult = poseDetector.detectForVideo(video, now)
         const detectedHands = result.landmarks || []
+        const sample = makeKeypointFrame(poseResult, result)
+        keypointBufferRef.current = [...keypointBufferRef.current.slice(-99), sample]
         setHands(detectedHands.map((_, index) => result.handedness?.[index]?.[0]?.categoryName || 'Hand'))
         const ctx = canvas.getContext('2d')
         ctx.clearRect(0, 0, width, height)
@@ -119,6 +298,15 @@ export default function App() {
         ctx.restore()
         lastTime = now
         fpsCount += 1
+        const recentSamples = keypointBufferRef.current.slice(-60)
+        const handsInWindow = recentSamples.filter((item) => item.hasHands).length
+        if (now - lastPredictionAtRef.current > 1200
+          && keypointBufferRef.current.length >= 60
+          && handsInWindow >= 12
+          && !predictionBusyRef.current) {
+          lastPredictionAtRef.current = now
+          void classifySequence([...keypointBufferRef.current])
+        }
         if (now - fpsStart > 800) {
           setFps(Math.round((fpsCount * 1000) / (now - fpsStart)))
           fpsCount = 0
@@ -129,11 +317,13 @@ export default function App() {
     }
     frameRef.current = requestAnimationFrame(render)
     return () => cancelAnimationFrame(frameRef.current)
-  }, [cameraOn])
+  }, [cameraOn, classifySequence])
 
   useEffect(() => () => {
     if (videoRef.current?.srcObject) videoRef.current.srcObject.getTracks().forEach((track) => track.stop())
     landmarkerRef.current?.close()
+    poseLandmarkerRef.current?.close()
+    classifierRef.current?.release()
   }, [])
 
   const switchCamera = () => {
@@ -145,6 +335,21 @@ export default function App() {
       window.setTimeout(() => startCamera(), 0)
     }
   }
+
+  const vocabulary = LABELS_BY_INDEX.map((label, index) => ({
+    index,
+    label,
+    word: GLOSS_TO_WORD.get(label) || label,
+  }))
+  const filteredVocabulary = vocabulary.filter(({ label, word }) => (
+    `${label} ${word}`.toLocaleLowerCase().includes(wordSearch.trim().toLocaleLowerCase())
+  ))
+  const vocabularyPageSize = 10
+  const vocabularyPageCount = Math.max(1, Math.ceil(filteredVocabulary.length / vocabularyPageSize))
+  const visibleVocabulary = filteredVocabulary.slice(
+    wordPage * vocabularyPageSize,
+    (wordPage + 1) * vocabularyPageSize,
+  )
 
   return (
     <main className="app-shell">
@@ -160,7 +365,8 @@ export default function App() {
         <div className="hero-copy">
           <div className="eyebrow"><span className="eyebrow-line" /> COMPUTER VISION, IN REAL TIME</div>
           <h1>Every gesture<br />has a <span>voice.</span></h1>
-          <p className="hero-description">See hand tracking in action. Move your hands into frame and watch 21 key landmarks map every movement, instantly.</p>
+          <p className="hero-subtitle">Myanmar Sign Language Recognition</p>
+          <p className="hero-description">Track your hands and body in real time, then see the Myanmar sign words predicted from each movement sequence.</p>
           <div className="hero-meta"><span><span className="meta-icon">✳</span> Runs right in your browser</span><span><span className="meta-icon">◉</span> Nothing leaves your device</span></div>
         </div>
 
@@ -173,8 +379,50 @@ export default function App() {
             {cameraOn && <div className="tracking-badge"><span className="tracking-pulse" /> TRACKING ACTIVE</div>}
             <div className="stage-corner-label">{cameraOn ? `${hands.length} ${hands.length === 1 ? 'HAND' : 'HANDS'} IN FRAME` : 'AWAITING CAMERA'}</div>
           </div>
-          <div className="card-controls"><div className="detection-status"><span className={`status-indicator ${cameraOn ? 'on' : ''}`} /><span>{cameraOn ? (hands.length ? `${hands.length} hand${hands.length > 1 ? 's' : ''} detected` : 'Looking for hands…') : 'Camera is off'}</span></div><div className="control-buttons"><button className="icon-button" type="button" onClick={switchCamera} aria-label="Switch camera" title="Switch camera">⇄</button><button className={`camera-button ${cameraOn ? 'stop-button' : ''}`} type="button" onClick={cameraOn ? stopCamera : startCamera} disabled={loading}>{loading ? <><span className="spinner" /> Loading model…</> : cameraOn ? <><span className="stop-icon" /> Stop camera</> : <><span className="camera-icon" /> Start camera</>}</button></div></div>
+          <div className="card-controls"><div className="detection-status"><span className={`status-indicator ${cameraOn ? 'on' : ''}`} /><span>{cameraOn ? (hands.length ? `${hands.length} hand${hands.length > 1 ? 's' : ''} detected` : 'Looking for hands…') : 'Camera is off'}</span></div><div className="control-buttons"><button className="icon-button" type="button" onClick={switchCamera} aria-label="Switch camera" title="Switch camera">⇄</button><button className={`camera-button ${cameraOn ? 'stop-button' : ''}`} type="button" onClick={cameraOn ? stopCamera : startCamera} disabled={loading}>{loading ? <><span className="spinner" /> Loading models…</> : cameraOn ? <><span className="stop-icon" /> Stop camera</> : <><span className="camera-icon" /> Start camera</>}</button></div></div>
           {error && <div className="error-message" role="alert">{error}</div>}
+          <section className="word-dashboard" aria-label="Myanmar sign recognition dashboard">
+            <div className="dashboard-heading">
+              <div>
+                <span className="dashboard-kicker">LIVE RECOGNITION</span>
+                <h2>Sign-to-word dashboard</h2>
+                <p>Myanmar emergency signs · trained from the local keypoint dataset</p>
+              </div>
+              <span className={`model-status ${cameraOn ? 'is-ready' : ''}`}><span />{cameraOn ? modelStatus || 'Recognition active' : 'Start tracking to recognize signs'}</span>
+            </div>
+
+            <div className="recognition-grid">
+              <div className="latest-match" aria-live="polite">
+                <span className="output-caption">TOP LIVE MATCH</span>
+                {topPredictions[0] ? <>
+                  <strong lang="my">{topPredictions[0].word}</strong>
+                  <span className="match-gloss" lang="my">Sign label · {topPredictions[0].label}</span>
+                  <span className="match-confidence">{Math.round(topPredictions[0].confidence * 100)}% confidence</span>
+                </> : <>
+                  <strong className="waiting-word" lang="my">စတင်ရန်</strong>
+                  <span className="match-gloss">Start a session and sign in view</span>
+                  <span className="match-confidence">Waiting for a sign sequence</span>
+                </>}
+              </div>
+              <div className="session-transcript">
+                <div className="transcript-heading"><div><span className="output-caption">SESSION WORDS</span><strong>Recognized signs</strong></div><span className="transcript-count">{recognizedWords.length.toString().padStart(2, '0')}</span></div>
+                {recognizedWords.length ? <ol className="transcript-list">{recognizedWords.map((item, index) => <li key={`${item.label}-${item.at}`}><span className="transcript-index">{String(recognizedWords.length - index).padStart(2, '0')}</span><span lang="my">{item.word}</span><small>{Math.round(item.confidence * 100)}%</small></li>)}</ol> : <p className="transcript-empty">Stable predictions will appear here as you sign.</p>}
+              </div>
+            </div>
+
+            <div className="vocabulary-heading">
+              <div><span className="output-caption">FROM YOUR DATASET</span><h3>Word library</h3></div>
+              <label className="word-search"><span>⌕</span><input value={wordSearch} onChange={(event) => { setWordSearch(event.target.value); setWordPage(0) }} placeholder="Search Myanmar signs" aria-label="Search dataset vocabulary" /></label>
+            </div>
+            <div className="word-library" aria-live="polite">
+              {visibleVocabulary.length ? visibleVocabulary.map(({ index, label, word }) => <div className="word-tile" key={label}>
+                <span className="tile-index">{String(index + 1).padStart(3, '0')}</span>
+                <strong lang="my">{word}</strong>
+                <small lang="my">{label !== word ? label : 'Myanmar sign'}</small>
+              </div>) : <p className="no-words">No vocabulary entries match “{wordSearch}”.</p>}
+            </div>
+            <div className="library-footer"><span>{filteredVocabulary.length} words from the dataset</span><div className="page-controls"><button type="button" onClick={() => setWordPage((page) => Math.max(0, page - 1))} disabled={wordPage === 0} aria-label="Previous words">←</button><span>{wordPage + 1} / {vocabularyPageCount}</span><button type="button" onClick={() => setWordPage((page) => Math.min(vocabularyPageCount - 1, page + 1))} disabled={wordPage >= vocabularyPageCount - 1} aria-label="Next words">→</button></div></div>
+          </section>
         </div>
       </section>
 
