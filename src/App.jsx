@@ -24,6 +24,19 @@ const GLOSS_TO_WORD = new Map(annotationText
   .filter(([written, gloss]) => written && gloss)
   .map(([written, gloss]) => [gloss.trim(), written.replace(/\s*။\s*$/, '').trim()]))
 
+const SIGN_LESSONS = [
+  { english: 'Hello', myanmar: 'မင်္ဂလာပါ', shape: 'point', pose: 'forehead', other: 'Rest the other hand near your abdomen.', movement: 'The source identifies this as a dynamic sign. Its figure shows the index finger pointing toward the face near the eye or forehead; follow a fluent signer for the complete motion.', face: 'Friendly greeting.', sourceNote: 'Figure 1(a) in the MSL study.', motion: '' },
+  { english: 'How are you?', myanmar: 'နေကောင်းလား', shape: 'point', pose: 'forehead', other: 'The other hand begins near the abdomen.', movement: 'Begin with one hand near the forehead, then move it down toward the chest.', face: 'Facial expression matters: this is a question.', sourceNote: 'Figure 3(a) in the MSL study.', motion: 'down' },
+  { english: "It's okay", myanmar: 'အဆင်ပြေတယ်', shape: 'both', pose: 'chest', other: 'Use both hands together in front of your chest.', movement: 'Start with both hands close together at chest level, then move them apart.', face: 'Facial expression matters to distinguish the meaning.', sourceNote: 'Figure 3(b) in the MSL study.', motion: 'apart' },
+  { english: 'Monday', myanmar: 'တနင်္လာ', shape: 'point', pose: 'eye', other: 'Rest the other hand near your abdomen.', movement: 'Uses the same hand sign as Hello, but at a different position near the nose or eye area.', face: 'Keep the expression natural.', sourceNote: 'Figure 1(b) in the MSL study.' },
+  { english: 'Tuesday', myanmar: 'အင်္ဂါ', shape: 'point', pose: 'unknown', other: 'The source does not specify the exact position in its text description.', movement: 'The study says Tuesday shares a hand sign with Sunday, with a different position. Compare the two lessons with a fluent signer.', face: 'Use the expression shown by a fluent signer.', sourceNote: 'The study describes the Tuesday/Sunday comparison.' },
+  { english: 'Wednesday', myanmar: 'ဗုဒ္ဓဟူး', shape: 'unknown', pose: 'unknown', other: 'The source does not specify the exact hand position in its text description.', movement: 'Wednesday and Thursday use the same hand position but different hand signs. Learn their exact shapes from a fluent signer.', face: 'Use the expression shown by a fluent signer.', sourceNote: 'The study describes the Wednesday/Thursday comparison.' },
+  { english: 'Thursday', myanmar: 'ကြာသပတေး', shape: 'unknown', pose: 'unknown', other: 'The source does not specify the exact hand position in its text description.', movement: 'Thursday and Wednesday use the same hand position but different hand signs. Learn their exact shapes from a fluent signer.', face: 'Use the expression shown by a fluent signer.', sourceNote: 'The study describes the Wednesday/Thursday comparison.' },
+  { english: 'Friday', myanmar: 'သောကြာ', shape: 'close', pose: 'mouth', other: 'The other hand rests near the abdomen.', movement: 'Hold one hand near the mouth or cheek, with fingers close to the face.', face: 'Keep the expression natural.', sourceNote: 'Figure 2(a) in the MSL study.' },
+  { english: 'Saturday', myanmar: 'စနေ', shape: 'close', pose: 'mouth', other: 'The other hand rests near the abdomen.', movement: 'Uses a different hand sign from Friday at a similar mouth or cheek position, with fingers close to the face.', face: 'Keep the expression natural.', sourceNote: 'Figure 2(b) in the MSL study.' },
+  { english: 'Sunday', myanmar: 'တနင်္ဂနွေ', shape: 'point', pose: 'unknown', other: 'The source does not specify the exact position in its text description.', movement: 'The study says Sunday shares a hand sign with Tuesday, with a different position. Compare the two lessons with a fluent signer.', face: 'Use the expression shown by a fluent signer.', sourceNote: 'The study describes the Tuesday/Sunday comparison.' },
+]
+
 const CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8],
   [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16],
@@ -73,6 +86,29 @@ function HandPlacementGuide() {
       <circle className="guide-joint" cx="59" cy="47" r="3"/><circle className="guide-joint" cx="72" cy="31" r="3"/><circle className="guide-joint" cx="85" cy="25" r="3"/><circle className="guide-joint" cx="98" cy="38" r="3"/>
     </svg>
   </div>
+}
+
+function LessonHandIcon({ pose, shape, movement }) {
+  const handPoint = pose === 'forehead' || pose === 'eye'
+  const handMouth = pose === 'mouth'
+  const handChest = pose === 'chest'
+  const known = pose !== 'unknown'
+  return <svg className="lesson-hand-icon" viewBox="0 0 220 190" role="img" aria-label={known ? `Illustration of hand position near ${handPoint ? 'the face' : handMouth ? 'the mouth' : 'the chest'}` : 'Hand position not specified in the source'}>
+    <circle className="lesson-head" cx="110" cy="43" r="25" />
+    <path className="lesson-body" d="M76 178v-41c0-23 14-37 34-37s34 14 34 37v41M83 112l-23 30m77-30 23 30" />
+    {shape === 'both' ? <><path className="lesson-arm" d="M60 142l28-20 15 5m57 15-28-20-15 5"/><circle className="lesson-hand" cx="103" cy="128" r="7"/><circle className="lesson-hand" cx="117" cy="128" r="7"/></>
+      : <><path className="lesson-arm" d={handPoint ? 'M160 142l-17-23-13-55' : handMouth ? 'M60 142l27-20 20-54' : handChest ? 'M60 142l27-20 14 17' : 'M60 142l28-20'} />
+        <circle className="lesson-hand resting" cx="60" cy="142" r="5" />
+        {known && <g className={`lesson-hand ${shape === 'point' ? 'pointing' : 'fingers-close'}`} transform={handPoint ? 'translate(130 52) rotate(270)' : handMouth ? 'translate(106 67) rotate(-5)' : 'translate(100 139)'}>
+          {shape === 'point' ? <path d="M-7 8h8V-8c0-5 7-5 7 0V7h11c4 0 5 3 4 6l-4 15c-1 4-4 6-8 6H-3c-5 0-8-3-8-8V13c0-3 1-5 4-5Z"/> : <path d="M-9 8V-5c0-5 7-5 7 0v9-13c0-5 7-5 7 0v13-11c0-5 7-5 7 0V6l2-6c2-4 8-2 6 3l-4 15c-1 5-5 8-10 8H0c-5 0-9-4-9-9Z"/>}
+        </g>}
+        {!known && <g className="lesson-unknown"><circle cx="110" cy="60" r="17"/><text x="110" y="67" textAnchor="middle">?</text></g>}
+      </>}
+    {movement === 'down' && <path className="lesson-motion" d="M132 68q9 34 -5 67" markerEnd="url(#lesson-arrow)"/>}
+    {movement === 'apart' && <><path className="lesson-motion" d="M105 141 84 154" markerEnd="url(#lesson-arrow)"/><path className="lesson-motion" d="m115 141 21 13" markerEnd="url(#lesson-arrow)"/></>}
+    <defs><marker id="lesson-arrow" markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto"><path d="M0 0 7 3.5 0 7"/></marker></defs>
+    <text className="lesson-position-label" x="110" y="187" textAnchor="middle">{known ? (handPoint ? 'FACE / FOREHEAD' : handMouth ? 'MOUTH / CHEEK' : handChest ? 'CHEST' : 'HAND POSITION') : 'POSITION NOT SPECIFIED'}</text>
+  </svg>
 }
 
 function makeKeypointFrame(poseResult, handResult) {
@@ -158,6 +194,7 @@ export default function App() {
   const [wordShapes, setWordShapes] = useState({})
   const [wordSearch, setWordSearch] = useState('')
   const [wordPage, setWordPage] = useState(0)
+  const [activeLessonIndex, setActiveLessonIndex] = useState(0)
   const [backendStatus, setBackendStatus] = useState('not configured')
   const backendClassifierReadyRef = useRef(false)
 
@@ -455,6 +492,7 @@ export default function App() {
     wordPage * vocabularyPageSize,
     (wordPage + 1) * vocabularyPageSize,
   )
+  const activeLesson = SIGN_LESSONS[activeLessonIndex]
 
   return (
     <main className="app-shell">
@@ -527,6 +565,30 @@ export default function App() {
                 {recognizedWords.length ? <ol className="transcript-list">{recognizedWords.map((item, index) => <li key={`${item.label}-${item.at}`}><span className="transcript-index">{String(recognizedWords.length - index).padStart(2, '0')}</span><span lang="my">{item.word}</span><small>{Math.round(item.confidence * 100)}%</small></li>)}</ol> : <p className="transcript-empty">Stable predictions will appear here as you sign.</p>}
               </div>
             </div>
+
+            <section className="learning-book" aria-label="Myanmar Sign Language learning book">
+              <div className="book-heading">
+                <div><span className="dashboard-kicker">LEARN A SIGN, STEP BY STEP</span><h3>Myanmar Sign Language learning book</h3><p>Choose a lesson to see the hand shape, position, movement, and facial-expression notes.</p></div>
+                <span className="book-count">{SIGN_LESSONS.length} lessons</span>
+              </div>
+              <div className="book-tabs" role="tablist" aria-label="Sign lessons">
+                {SIGN_LESSONS.map((lesson, index) => <button key={lesson.english} id={`lesson-tab-${index}`} type="button" role="tab" aria-selected={activeLessonIndex === index} aria-controls="lesson-page" className={activeLessonIndex === index ? 'is-selected' : ''} onClick={() => setActiveLessonIndex(index)}><span>{String(index + 1).padStart(2, '0')}</span>{lesson.english}</button>)}
+              </div>
+              <article className="lesson-page" id="lesson-page" role="tabpanel" aria-labelledby={`lesson-tab-${activeLessonIndex}`}>
+                <div className="lesson-art"><LessonHandIcon pose={activeLesson.pose} shape={activeLesson.shape} movement={activeLesson.motion} /><span>Hand position illustration</span></div>
+                <div className="lesson-content">
+                  <div className="lesson-title"><span>LESSON {String(activeLessonIndex + 1).padStart(2, '0')}</span><h4>{activeLesson.english}</h4><strong lang="my">{activeLesson.myanmar}</strong></div>
+                  <div className="lesson-facts">
+                    <div><span>HAND POSITION</span><p>{activeLesson.pose === 'unknown' ? 'The source does not specify the exact position.' : activeLesson.pose === 'forehead' ? 'Near the eye or forehead; point the index finger toward the face.' : activeLesson.pose === 'eye' ? 'Near the nose or eye area.' : activeLesson.pose === 'mouth' ? 'Near the mouth or cheek, fingers close to the face.' : 'In front of the chest.'}</p></div>
+                    <div><span>OTHER HAND</span><p>{activeLesson.other}</p></div>
+                    <div><span>MOVEMENT</span><p>{activeLesson.movement}</p></div>
+                    <div><span>FACE & PRACTICE</span><p>{activeLesson.face} Practice slowly, watching the full sign and body position.</p></div>
+                  </div>
+                  <p className="lesson-source">{activeLesson.sourceNote} <a href="https://conferences.info.uaic.ro/consilr/2026/prevEditions/Consilr_2023.pdf" target="_blank" rel="noreferrer">Read the source study ↗</a></p>
+                  <p className="lesson-accuracy-note">This hand drawing is a simplified learning illustration. Myanmar Sign Language has regional variants; learn the complete movement from a fluent Deaf signer or teacher.</p>
+                </div>
+              </article>
+            </section>
 
             <div className="vocabulary-heading">
               <div><span className="output-caption">FROM YOUR DATASET</span><h3>Word library</h3></div>
