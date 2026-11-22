@@ -17,7 +17,13 @@ Allow camera access when prompted. The page uses MediaPipe Pose and Hand Landmar
 - The underlying [MSL4Emergency corpus](https://github.com/ye-kyaw-thu/MSL4Emergency) is licensed CC BY-NC-SA 4.0. Keep the attribution and license terms when sharing or adapting the dataset; commercial use is not permitted under that license.
 - The BiLSTM ONNX model is loaded directly from the source repository at runtime. The model files are not redistributed in this project.
 
-The local `data/myanmar-sign-language-recognition/` folder contains 558 annotations, 541 label classes, train/validation/test and five-fold splits, 558 pose-and-hand landmark sequences with visibility arrays, extraction statistics, and five sample inference videos. The homepage bundles the label map and annotations for the word dashboard.
+The local `data/myanmar-sign-language-recognition/` folder contains 558 annotations, 541 label classes, train/validation/test and five-fold splits, 558 pose-and-hand landmark sequences with visibility arrays, extraction statistics, and five sample inference videos. The homepage bundles the label map and annotations for the word dashboard, and shows a representative hand-landmark sketch on each word card.
+
+Regenerate the word-card hand sketches after replacing keypoint files with:
+
+```sh
+npm run generate:hand-shapes
+```
 
 ## Recognition notes
 

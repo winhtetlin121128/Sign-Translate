@@ -29,6 +29,35 @@ const CONNECTIONS = [
   [13, 17], [17, 18], [18, 19], [19, 20], [0, 17],
 ]
 
+function HandShape({ hands, label }) {
+  const visibleHands = hands || []
+  const visiblePoints = visibleHands.flatMap((points) => points.filter(([x, y]) => Math.abs(x) + Math.abs(y) > 1e-6))
+  if (!visiblePoints.length) return <span className="shape-placeholder" aria-hidden="true">✳</span>
+
+  const minX = Math.min(...visiblePoints.map(([x]) => x))
+  const maxX = Math.max(...visiblePoints.map(([x]) => x))
+  const minY = Math.min(...visiblePoints.map(([, y]) => y))
+  const maxY = Math.max(...visiblePoints.map(([, y]) => y))
+  const width = Math.max(maxX - minX, 0.001)
+  const height = Math.max(maxY - minY, 0.001)
+  const scale = Math.min(104 / width, 48 / height)
+  const offsetX = (120 - width * scale) / 2 - minX * scale
+  const offsetY = (58 - height * scale) / 2 - minY * scale + 3
+  const project = ([x, y]) => [x * scale + offsetX, y * scale + offsetY]
+
+  return <svg className="hand-shape-svg" viewBox="0 0 120 64" role="img" aria-label={`Hand shape for ${label}`}>
+    {visibleHands.map((points, handIndex) => {
+      const projected = points.map(project)
+      const isVisible = points.map(([x, y]) => Math.abs(x) + Math.abs(y) > 1e-6)
+      const tone = handIndex % 2 === 0 ? 'mint' : 'gold'
+      return <g className={`shape-hand ${tone}`} key={handIndex}>
+        {CONNECTIONS.map(([from, to]) => isVisible[from] && isVisible[to] && <line key={`${from}-${to}`} x1={projected[from][0]} y1={projected[from][1]} x2={projected[to][0]} y2={projected[to][1]} />)}
+        {projected.map(([x, y], index) => isVisible[index] && <circle key={index} cx={x} cy={y} r={index === 0 || [4, 8, 12, 16, 20].includes(index) ? 1.9 : 1.2} />)}
+      </g>
+    })}
+  </svg>
+}
+
 function makeKeypointFrame(poseResult, handResult) {
   const coordinates = new Float32Array(FEATURE_COUNT)
   const pose = poseResult.landmarks?.[0] || []
@@ -109,8 +138,21 @@ export default function App() {
   const [facingMode, setFacingMode] = useState('user')
   const [topPredictions, setTopPredictions] = useState([])
   const [recognizedWords, setRecognizedWords] = useState([])
+  const [wordShapes, setWordShapes] = useState({})
   const [wordSearch, setWordSearch] = useState('')
   const [wordPage, setWordPage] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    fetch(`${import.meta.env.BASE_URL}data/msl-hand-shapes.json`)
+      .then((response) => {
+        if (!response.ok) throw new Error('Could not load sign illustrations')
+        return response.json()
+      })
+      .then((shapes) => { if (active) setWordShapes(shapes) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
 
   const stopCamera = useCallback(() => {
     cancelAnimationFrame(frameRef.current)
@@ -138,7 +180,7 @@ export default function App() {
     ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/'
     ort.env.wasm.numThreads = 1
     ortModuleRef.current = ort
-    const vision = await FilesetResolver.forVisionTasks('/mediapipe/wasm')
+    const vision = await FilesetResolver.forVisionTasks(`${import.meta.env.BASE_URL}mediapipe/wasm`)
     const createVisionTask = async (Task, taskOptions) => {
       try {
         return await Task.createFromOptions(vision, {
@@ -417,6 +459,7 @@ export default function App() {
             <div className="word-library" aria-live="polite">
               {visibleVocabulary.length ? visibleVocabulary.map(({ index, label, word }) => <div className="word-tile" key={label}>
                 <span className="tile-index">{String(index + 1).padStart(3, '0')}</span>
+                <div className="word-shape"><HandShape hands={wordShapes[label]} label={word} /></div>
                 <strong lang="my">{word}</strong>
                 <small lang="my">{label !== word ? label : 'Myanmar sign'}</small>
               </div>) : <p className="no-words">No vocabulary entries match “{wordSearch}”.</p>}

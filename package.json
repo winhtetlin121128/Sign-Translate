@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "generate:hand-shapes": "node scripts/generate-hand-shapes.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
   },
