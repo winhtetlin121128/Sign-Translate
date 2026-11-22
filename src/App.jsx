@@ -487,6 +487,18 @@ export default function App() {
           </div>
           <div className="card-controls"><div className="detection-status"><span className={`status-indicator ${cameraOn ? 'on' : ''}`} /><span>{cameraOn ? (hands.length ? `${hands.length} hand${hands.length > 1 ? 's' : ''} detected` : 'Looking for hands…') : 'Camera is off'}</span></div><div className="control-buttons"><button className="icon-button" type="button" onClick={switchCamera} aria-label="Switch camera" title="Switch camera">⇄</button><button className={`camera-button ${cameraOn ? 'stop-button' : ''}`} type="button" onClick={cameraOn ? stopCamera : startCamera} disabled={loading}>{loading ? <><span className="spinner" /> Loading models…</> : cameraOn ? <><span className="stop-icon" /> Stop camera</> : <><span className="camera-icon" /> Start camera</>}</button></div></div>
           {error && <div className="error-message" role="alert">{error}</div>}
+          <section className="training-guide" aria-labelledby="training-guide-title">
+            <div className="training-guide-heading">
+              <span className="guide-book-icon" aria-hidden="true">▤</span>
+              <div><span className="dashboard-kicker">FIRST TIME? START HERE</span><h2 id="training-guide-title">How to use a practice session</h2></div>
+            </div>
+            <ol className="training-steps">
+              <li><span>1</span><div><strong>Start the camera</strong><small>Press “Start camera” and allow camera access when your browser asks.</small></div></li>
+              <li><span>2</span><div><strong>Set up your hand</strong><small>Face your palm toward the camera. Keep your hand and upper body visible, then make a sign from the word library.</small></div></li>
+              <li><span>3</span><div><strong>Read the result</strong><small>Hold a clear view while signing. “Top live match” shows the current guess; “Session words” lists guesses the model recognizes consistently.</small></div></li>
+            </ol>
+            <p className="training-note"><strong>About practice:</strong> this session checks signs against the existing model. It does not save examples or retrain the model.</p>
+          </section>
           <section className="word-dashboard" aria-label="Myanmar sign recognition dashboard">
             <div className="dashboard-heading">
               <div>
