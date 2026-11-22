@@ -4,7 +4,7 @@ This service follows the supplied architecture: Python + MediaPipe + OpenCV for 
 
 ## Start locally
 
-Use Python 3.11 on Windows, macOS, or Linux:
+Use Python 3.11 on Windows, macOS, or Linux. The `.python-version` file pins Railway's runtime to 3.11, which has compatible TensorFlow wheels:
 
 ```sh
 cd backend
