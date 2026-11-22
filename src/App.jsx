@@ -4,6 +4,7 @@ import annotationText from './data/msl-annotations.txt?raw'
 import './App.css'
 
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || 'https://sign-translate-api-production.up.railway.app'
 const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task'
 const MODEL_SOURCE_REVISION = '76d200c5b3eea3a13c4f314e61334b5d725611b5'
 const MODEL_SOURCE = `https://raw.githubusercontent.com/lawun330/myanmar-sign-language-recognition/${MODEL_SOURCE_REVISION}/onnx_models`
@@ -28,6 +29,35 @@ const CONNECTIONS = [
   [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16],
   [13, 17], [17, 18], [18, 19], [19, 20], [0, 17],
 ]
+
+function HandShape({ hands, label }) {
+  const visibleHands = hands || []
+  const visiblePoints = visibleHands.flatMap((points) => points.filter(([x, y]) => Math.abs(x) + Math.abs(y) > 1e-6))
+  if (!visiblePoints.length) return <span className="shape-placeholder" aria-hidden="true">✳</span>
+
+  const minX = Math.min(...visiblePoints.map(([x]) => x))
+  const maxX = Math.max(...visiblePoints.map(([x]) => x))
+  const minY = Math.min(...visiblePoints.map(([, y]) => y))
+  const maxY = Math.max(...visiblePoints.map(([, y]) => y))
+  const width = Math.max(maxX - minX, 0.001)
+  const height = Math.max(maxY - minY, 0.001)
+  const scale = Math.min(104 / width, 48 / height)
+  const offsetX = (120 - width * scale) / 2 - minX * scale
+  const offsetY = (58 - height * scale) / 2 - minY * scale + 3
+  const project = ([x, y]) => [x * scale + offsetX, y * scale + offsetY]
+
+  return <svg className="hand-shape-svg" viewBox="0 0 120 64" role="img" aria-label={`Hand shape for ${label}`}>
+    {visibleHands.map((points, handIndex) => {
+      const projected = points.map(project)
+      const isVisible = points.map(([x, y]) => Math.abs(x) + Math.abs(y) > 1e-6)
+      const tone = handIndex % 2 === 0 ? 'mint' : 'gold'
+      return <g className={`shape-hand ${tone}`} key={handIndex}>
+        {CONNECTIONS.map(([from, to]) => isVisible[from] && isVisible[to] && <line key={`${from}-${to}`} x1={projected[from][0]} y1={projected[from][1]} x2={projected[to][0]} y2={projected[to][1]} />)}
+        {projected.map(([x, y], index) => isVisible[index] && <circle key={index} cx={x} cy={y} r={index === 0 || [4, 8, 12, 16, 20].includes(index) ? 1.9 : 1.2} />)}
+      </g>
+    })}
+  </svg>
+}
 
 function makeKeypointFrame(poseResult, handResult) {
   const coordinates = new Float32Array(FEATURE_COUNT)
@@ -109,8 +139,41 @@ export default function App() {
   const [facingMode, setFacingMode] = useState('user')
   const [topPredictions, setTopPredictions] = useState([])
   const [recognizedWords, setRecognizedWords] = useState([])
+  const [wordShapes, setWordShapes] = useState({})
   const [wordSearch, setWordSearch] = useState('')
   const [wordPage, setWordPage] = useState(0)
+  const [backendStatus, setBackendStatus] = useState('not configured')
+  const backendClassifierReadyRef = useRef(false)
+
+  useEffect(() => {
+    if (!API_BASE_URL) return undefined
+    const controller = new AbortController()
+    fetch(`${API_BASE_URL}/health`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error('API health check failed')
+        return response.json()
+      })
+      .then((health) => {
+        backendClassifierReadyRef.current = Boolean(health.classifier_loaded)
+        setBackendStatus(health.classifier_loaded ? 'recognition ready' : 'connected · model weights missing')
+      })
+      .catch((healthError) => {
+        if (healthError.name !== 'AbortError') setBackendStatus('unavailable · using browser model')
+      })
+    return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    fetch(`${import.meta.env.BASE_URL}data/msl-hand-shapes.json`)
+      .then((response) => {
+        if (!response.ok) throw new Error('Could not load sign illustrations')
+        return response.json()
+      })
+      .then((shapes) => { if (active) setWordShapes(shapes) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
 
   const stopCamera = useCallback(() => {
     cancelAnimationFrame(frameRef.current)
@@ -138,7 +201,7 @@ export default function App() {
     ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/'
     ort.env.wasm.numThreads = 1
     ortModuleRef.current = ort
-    const vision = await FilesetResolver.forVisionTasks('/mediapipe/wasm')
+    const vision = await FilesetResolver.forVisionTasks(`${import.meta.env.BASE_URL}mediapipe/wasm`)
     const createVisionTask = async (Task, taskOptions) => {
       try {
         return await Task.createFromOptions(vision, {
@@ -185,6 +248,32 @@ export default function App() {
     if (!classifier || predictionBusyRef.current) return
     predictionBusyRef.current = true
     try {
+      if (backendClassifierReadyRef.current && API_BASE_URL) {
+        const response = await fetch(`${API_BASE_URL}/api/recognize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            keypoints: samples.map(({ coordinates }) => Array.from({ length: LANDMARK_COUNT }, (_, index) => Array.from(coordinates.slice(index * COORDINATE_COUNT, (index + 1) * COORDINATE_COUNT)))),
+          }),
+        })
+        if (!response.ok) throw new Error(`Backend recognition returned ${response.status}`)
+        const result = await response.json()
+        const top = result.predictions.map(({ label, confidence }) => ({
+          label,
+          word: GLOSS_TO_WORD.get(label) || label,
+          confidence,
+        }))
+        setTopPredictions(top)
+        if (top[0]?.confidence >= 0.15) {
+          const now = Date.now()
+          predictionVotesRef.current = [...predictionVotesRef.current, { ...top[0], at: now }].slice(-3)
+          const voteCount = predictionVotesRef.current.filter((vote) => vote.label === top[0].label).length
+          if (voteCount >= 2) {
+            setRecognizedWords((current) => current[0]?.label === top[0].label ? current : [{ ...top[0], at: now }, ...current].slice(0, 8))
+          }
+        }
+        return
+      }
       const tensors = makeClassifierTensors(samples, ortModuleRef.current)
       const output = await classifier.run(tensors)
       const logits = output[classifier.outputNames[0]].data
@@ -388,7 +477,7 @@ export default function App() {
                 <h2>Sign-to-word dashboard</h2>
                 <p>Myanmar emergency signs · trained from the local keypoint dataset</p>
               </div>
-              <span className={`model-status ${cameraOn ? 'is-ready' : ''}`}><span />{cameraOn ? modelStatus || 'Recognition active' : 'Start tracking to recognize signs'}</span>
+              <span className={`model-status ${cameraOn ? 'is-ready' : ''}`}><span />{cameraOn ? `${modelStatus || 'Recognition active'}${API_BASE_URL ? ` · API ${backendStatus}` : ''}` : API_BASE_URL ? `API ${backendStatus}` : 'Start tracking to recognize signs'}</span>
             </div>
 
             <div className="recognition-grid">
@@ -417,6 +506,7 @@ export default function App() {
             <div className="word-library" aria-live="polite">
               {visibleVocabulary.length ? visibleVocabulary.map(({ index, label, word }) => <div className="word-tile" key={label}>
                 <span className="tile-index">{String(index + 1).padStart(3, '0')}</span>
+                <div className="word-shape"><HandShape hands={wordShapes[label]} label={word} /></div>
                 <strong lang="my">{word}</strong>
                 <small lang="my">{label !== word ? label : 'Myanmar sign'}</small>
               </div>) : <p className="no-words">No vocabulary entries match “{wordSearch}”.</p>}
@@ -431,3 +521,4 @@ export default function App() {
     </main>
   )
 }
+
