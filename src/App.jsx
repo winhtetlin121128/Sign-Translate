@@ -59,6 +59,22 @@ function HandShape({ hands, label }) {
   </svg>
 }
 
+function HandPlacementGuide() {
+  return <div className="hand-placement-guide" aria-label="Hand position guide">
+    <div className="guide-copy">
+      <span>HAND SHAPE GUIDE</span>
+      <small>Face your palm toward the camera. Keep your wrist and fingertips in frame.</small>
+    </div>
+    <svg viewBox="0 0 160 180" aria-hidden="true">
+      <rect className="guide-boundary" x="12" y="8" width="136" height="164" rx="8" />
+      <path className="guide-palm" d="M53 87V47c0-8 12-8 12 0v31V31c0-9 13-9 13 0v46V25c0-9 13-9 13 0v53V38c0-9 13-9 13 0v62c0 32-19 51-46 51-18 0-31-10-39-27l-11-23c-4-9 8-15 13-7l12 17V87c0-8 12-8 12 0Z" />
+      <path className="guide-bone" d="M59 140V88m0-10V47m13 30V31m13 46V25m13 52V38m-39 50 13 2 13-2 13 1m-39 17 13 2 13-2 13 1m-39 16 13 2 13-2 13 1m-39 15 13 2 13-2" />
+      <path className="guide-axis" d="M80 12v156" />
+      <circle className="guide-joint" cx="59" cy="47" r="3"/><circle className="guide-joint" cx="72" cy="31" r="3"/><circle className="guide-joint" cx="85" cy="25" r="3"/><circle className="guide-joint" cx="98" cy="38" r="3"/>
+    </svg>
+  </div>
+}
+
 function makeKeypointFrame(poseResult, handResult) {
   const coordinates = new Float32Array(FEATURE_COUNT)
   const pose = poseResult.landmarks?.[0] || []
@@ -464,6 +480,7 @@ export default function App() {
           <div className={`camera-stage ${cameraOn ? 'is-live' : ''}`}>
             <video ref={videoRef} className="camera-video" playsInline muted aria-label="Live camera preview" />
             <canvas ref={canvasRef} className="landmark-canvas" />
+            {cameraOn && !hands.length && <HandPlacementGuide />}
             {!cameraOn && <div className="camera-placeholder"><div className="scan-frame"><i className="corner tl" /><i className="corner tr" /><i className="corner bl" /><i className="corner br" /><div className="hand-illustration"><svg viewBox="0 0 120 140" role="img" aria-label="Hand outline"><path d="M34 69V35a7 7 0 0 1 14 0v28-43a7 7 0 0 1 14 0v42-37a7 7 0 0 1 14 0v40-28a7 7 0 0 1 14 0v52c0 27-15 42-39 42h-2c-15 0-26-8-34-23L9 84a8 8 0 0 1 14-8l11 15V69Z" /></svg><span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="crosshair crosshair-one">+</span><span className="crosshair crosshair-two">+</span></div><div className="placeholder-text"><span className="placeholder-title">Your camera, your canvas</span><span className="placeholder-subtitle">Start the camera to begin tracking</span></div></div></div>}
             {cameraOn && <div className="tracking-badge"><span className="tracking-pulse" /> TRACKING ACTIVE</div>}
             <div className="stage-corner-label">{cameraOn ? `${hands.length} ${hands.length === 1 ? 'HAND' : 'HANDS'} IN FRAME` : 'AWAITING CAMERA'}</div>
