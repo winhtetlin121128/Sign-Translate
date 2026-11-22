@@ -4,6 +4,7 @@ import annotationText from './data/msl-annotations.txt?raw'
 import './App.css'
 
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || ''
 const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task'
 const MODEL_SOURCE_REVISION = '76d200c5b3eea3a13c4f314e61334b5d725611b5'
 const MODEL_SOURCE = `https://raw.githubusercontent.com/lawun330/myanmar-sign-language-recognition/${MODEL_SOURCE_REVISION}/onnx_models`
@@ -141,6 +142,26 @@ export default function App() {
   const [wordShapes, setWordShapes] = useState({})
   const [wordSearch, setWordSearch] = useState('')
   const [wordPage, setWordPage] = useState(0)
+  const [backendStatus, setBackendStatus] = useState('not configured')
+  const backendClassifierReadyRef = useRef(false)
+
+  useEffect(() => {
+    if (!API_BASE_URL) return undefined
+    const controller = new AbortController()
+    fetch(`${API_BASE_URL}/health`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error('API health check failed')
+        return response.json()
+      })
+      .then((health) => {
+        backendClassifierReadyRef.current = Boolean(health.classifier_loaded)
+        setBackendStatus(health.classifier_loaded ? 'recognition ready' : 'connected · model weights missing')
+      })
+      .catch((healthError) => {
+        if (healthError.name !== 'AbortError') setBackendStatus('unavailable · using browser model')
+      })
+    return () => controller.abort()
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -227,6 +248,32 @@ export default function App() {
     if (!classifier || predictionBusyRef.current) return
     predictionBusyRef.current = true
     try {
+      if (backendClassifierReadyRef.current && API_BASE_URL) {
+        const response = await fetch(`${API_BASE_URL}/api/recognize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            keypoints: samples.map(({ coordinates }) => Array.from({ length: LANDMARK_COUNT }, (_, index) => Array.from(coordinates.slice(index * COORDINATE_COUNT, (index + 1) * COORDINATE_COUNT)))),
+          }),
+        })
+        if (!response.ok) throw new Error(`Backend recognition returned ${response.status}`)
+        const result = await response.json()
+        const top = result.predictions.map(({ label, confidence }) => ({
+          label,
+          word: GLOSS_TO_WORD.get(label) || label,
+          confidence,
+        }))
+        setTopPredictions(top)
+        if (top[0]?.confidence >= 0.15) {
+          const now = Date.now()
+          predictionVotesRef.current = [...predictionVotesRef.current, { ...top[0], at: now }].slice(-3)
+          const voteCount = predictionVotesRef.current.filter((vote) => vote.label === top[0].label).length
+          if (voteCount >= 2) {
+            setRecognizedWords((current) => current[0]?.label === top[0].label ? current : [{ ...top[0], at: now }, ...current].slice(0, 8))
+          }
+        }
+        return
+      }
       const tensors = makeClassifierTensors(samples, ortModuleRef.current)
       const output = await classifier.run(tensors)
       const logits = output[classifier.outputNames[0]].data
@@ -430,7 +477,7 @@ export default function App() {
                 <h2>Sign-to-word dashboard</h2>
                 <p>Myanmar emergency signs · trained from the local keypoint dataset</p>
               </div>
-              <span className={`model-status ${cameraOn ? 'is-ready' : ''}`}><span />{cameraOn ? modelStatus || 'Recognition active' : 'Start tracking to recognize signs'}</span>
+              <span className={`model-status ${cameraOn ? 'is-ready' : ''}`}><span />{cameraOn ? `${modelStatus || 'Recognition active'}${API_BASE_URL ? ` · API ${backendStatus}` : ''}` : API_BASE_URL ? `API ${backendStatus}` : 'Start tracking to recognize signs'}</span>
             </div>
 
             <div className="recognition-grid">
@@ -474,3 +521,4 @@ export default function App() {
     </main>
   )
 }
+

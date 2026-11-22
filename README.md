@@ -28,3 +28,10 @@ npm run generate:hand-shapes
 ## Recognition notes
 
 The dashboard shows the current top model match, a short list of stable session predictions, and a searchable vocabulary. Predictions can vary with camera framing and signing style; the model is an educational demonstration rather than a certified translation service.
+
+## Python backend option
+
+The `backend/` folder contains a FastAPI service following the requested Python + MediaPipe + TensorFlow/Keras + OpenCV structure. See [backend/README.md](backend/README.md) for setup, API payloads, and model requirements. It needs a Python-capable API host such as Render or Railway; GitHub Pages can continue to host the static React frontend. The backend scaffold can detect landmarks now, but sign classification requires a compatible `.keras` model, which is not included in the dataset files.
+
+For the frontend build, set `VITE_API_BASE_URL` to the deployed backend's HTTPS origin. A template is in `.env.example`.
+
